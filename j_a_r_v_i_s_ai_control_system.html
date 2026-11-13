@@ -2204,6 +2204,87 @@
             update();
             setInterval(update, 1000);
         }
+		// =========================================================
+// 🌐 멀티 디바이스 실시간 연동 패치 (Firebase REST Polling/Sync)
+// =========================================================
+const FIREBASE_DB_URL = "https://https://jarvis-70cfd-default-rtdb.firebaseio.com/jarvis_state.json"; 
+// 위 주소를 본인 Firebase Realtime Database 주소 끝부분에 /jarvis_state.json을 붙여서 입력
+
+let lastSyncedRaw = "";
+
+// 1) 로컬 상태가 바뀔 때 클라우드 DB로 즉시 업로드
+async function pushStateToCloud() {
+    const payload = {
+        node: JSON.parse(localStorage.getItem(STORAGE_NODE_KEY)),
+        schedules: schedules,
+        isStudyActive: isStudyActive,
+        isLightOn: isLightOn,
+        updatedAt: Date.now()
+    };
+    const raw = JSON.stringify(payload);
+    lastSyncedRaw = raw;
+    try {
+        await fetch(FIREBASE_DB_URL, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: raw
+        });
+    } catch (e) {
+        console.warn("클라우드 동기화 대기 중:", e);
+    }
+}
+
+// 2) 다른 기기에서 변경한 상태를 1.5초마다 실시간 감지하여 내 화면에 반영
+async function pullStateFromCloud() {
+    if (FIREBASE_DB_URL.includes("YOUR_DATABASE_URL")) return;
+    try {
+        const res = await fetch(FIREBASE_DB_URL);
+        const data = await res.json();
+        if (!data) return;
+
+        const incomingRaw = JSON.stringify(data);
+        if (incomingRaw === lastSyncedRaw) return; // 변경사항 없으면 무시
+        lastSyncedRaw = incomingRaw;
+
+        // 연산 기기 정보 동기화
+        if (data.node) {
+            localStorage.setItem(STORAGE_NODE_KEY, JSON.stringify(data.node));
+            updateLoginNodePreview();
+            if (!document.getElementById("user-dashboard").classList.contains("hidden")) {
+                showUserDashboard();
+            }
+        }
+        // 스케줄 동기화
+        if (data.schedules) {
+            schedules = data.schedules;
+            localStorage.setItem(STORAGE_SCHED_KEY, JSON.stringify(schedules));
+            renderCalendar();
+            renderScheduleList();
+        }
+        // 공부 모드 및 조명 상태 원격 동기화
+        if (typeof data.isStudyActive === "boolean" && data.isStudyActive !== isStudyActive) {
+            toggleStudyMode();
+        }
+        if (typeof data.isLightOn === "boolean" && data.isLightOn !== isLightOn) {
+            toggleLightMode();
+        }
+    } catch (e) {}
+}
+
+// 기존 함수 실행 시 자동으로 클라우드 업로드 트리거 연결
+["registerCurrentDeviceAsPanel", "updateDeviceName", "toggleStudyMode", "toggleLightMode", "addScheduleItem", "deleteScheduleItem"].forEach(fnName => {
+    const origFn = window[fnName];
+    if (typeof origFn === "function") {
+        window[fnName] = function(...args) {
+            const result = origFn.apply(this, args);
+            pushStateToCloud();
+            return result;
+        };
+    }
+});
+
+setInterval(pullStateFromCloud, 1500);
+pullStateFromCloud();
     </script>
 </body>
 </html>
